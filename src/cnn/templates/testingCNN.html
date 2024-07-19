@@ -140,6 +140,7 @@
 				<li class="links"><a href="http://127.0.0.1:8080/audioGeneration">Generate Audio</a></li>
 			</ul>
 		</nav>
+		<p><b>Spectral Power Density (dB)</b></p>
 		<div id="outer-container">
 			<div id="ylabel-container">
 				{{range .Ylabel}}
@@ -162,6 +163,20 @@
 				<form action="http://127.0.0.1:8080/audioCNNtest" method="post">
 					<fieldset>
 						<div class="options">
+							<table>
+								<tr>
+									<td>Epochs:</td>
+									<td>{{.Epochs}}</td>
+									<td>Learning Rate:</td>
+									<td>{{.LearningRate}}</td>
+								</tr>
+								<tr>
+									<td>FFT Window:</td>
+									<td>{{.FFTWindow}}</td>
+									<td>FFT Size:</td>
+									<td>{{.FFTSize}}</td>
+								</tr>
+							</table>
 							<label class="align-right" for="epochs">Epochs:</label>
 							<input type="text" id="epochs" value="{{.Epochs}}" readonly /input>
 							<label class="align-right" for="learningrate">Learning Rate:</label>

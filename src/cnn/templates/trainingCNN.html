@@ -159,12 +159,31 @@
 				<form action="http://127.0.0.1:8080/audioCNN" method="post">
 					<fieldset>
 						<legend>CNN Audio Training Parameters</legend>
+						<p>Enter <i>Learning Rate</i> and <i>Epochs</i> to train the CNN.  FFT size 8192 only uses rectangle window. 
+							 Rectangle window uses no overlap for FFT.  Other windows use 50% overlap.
+						</p>
 						<div class="options">
 							<label for="learningrate">Learning Rate:</label>
 							<input type="number" id="learningrate" name="learningrate" value="{{.LearningRate}}" min=".00001" max=".99999" step=".00001" required />
 							<label for="epochs">Epochs:</label>
 							<input type="number" id="epochs" name="epochs" value="{{.Epochs}}" min="2" max="400" required />
 						</div>
+						<label for="fftwindow">FFT Window:</label>
+						<select id="fftwindow" name="fftwindow" required>
+							<option value="Bartlett">Bartlett</option>
+							<option value="Welch">Welch</option>
+							<option value="Hamming">Hamming</option>
+							<option value="Hanning">Hanning</option>
+							<option value="Rectangle" selected>Rectangle</option>
+						</select>
+						<br />
+						<label for="fftsize">FFT Size:</label>
+						<select id="fftsize" name="fftsize" required>
+							<option value="1024">1024</option>
+							<option value="2048">2048</option>
+							<option value="4096">4096</option>
+							<option value="8192" selected>8192</option>
+						</select>
 						<br />
 						<input type="submit" value="Submit" />
 						<input type="text" size="100px" id="status" name="status" value="{{.Status}}" readonly />

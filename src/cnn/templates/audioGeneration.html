@@ -163,7 +163,9 @@
 				<form action="http://127.0.0.1:8080/audioGeneration" method="post">
 					<fieldset>
 						<legend>CNN Audio Generation Parameters</legend>
-						<p>Enter <i>SNR</i> for new wav files or <i>filename</i> to plot the PSD of an existing <b>wav</b> file</p>
+						<p>Enter <i>SNR</i> for new wav files or <i>filename</i> to plot the PSD of an existing Wav file.  
+							FFT size 8192 only uses rectangle window.  Rectangle window uses no overlap for FFT.  Other windows use 50% overlap.
+						</p>
 						<div class="options">
 							<table>
 								<tr>
@@ -174,11 +176,28 @@
 								</tr>
 								<tr>
 									<td>Samples:</td>
-									<td>8000</td>
+									<td>8192</td>
 									<td>Sample Rate (Hz):</td>
 									<td>4000</td>
 								</tr>
 							</table>
+							<label for="fftwindow">FFT Window:</label>
+							<select id="fftwindow" name="fftwindow" required>
+								<option value="Bartlett">Bartlett</option>
+								<option value="Welch">Welch</option>
+								<option value="Hamming">Hamming</option>
+								<option value="Hanning">Hanning</option>
+								<option value="Rectangle" selected>Rectangle</option>
+							</select>
+							<br />
+							<label for="fftsize">FFT Size:</label>
+							<select id="fftsize" name="fftsize" required>
+								<option value="1024">1024</option>
+								<option value="2048">2048</option>
+								<option value="4096">4096</option>
+								<option value="8192" selected>8192</option>
+							</select>
+							<br />
 							<label for="filename">Audio Wav Filename:</label>
 							<input type="file" id="filename" name="filename" />
 						</div>

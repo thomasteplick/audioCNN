@@ -91,9 +91,8 @@ const (
 	hiddenLayers           = 1                    // number of hidden layers
 	kernelDim              = 10                   // kernel dimension, height and width
 	stride                 = 10                   // stride for filter forward and backward
-	FFTSize                = 8192                 // default FFT size
 	sampleRate             = 4000                 // Hz
-	samples                = 8000                 // audio samples
+	SAMPLES                = 8192                 // audio samples
 	twoPi                  = 2.0 * math.Pi        // 2Pi
 	bitDepth               = 16                   // audio wav encoder/decoder bit size
 )
@@ -109,6 +108,8 @@ type PlotT struct {
 	TestResults  []Results // tabulated statistics of testing
 	TotalCount   string    // Results tabulation
 	TotalCorrect string
+	FFTSize      string // 8192, 4098, 2048, 1024
+	FFTWindow    string // Bartlett, Welch, Hamming, Hanning, Rectangle
 }
 
 // Type to hold the minimum and maximum data values of the MSE in the Learning Curve
@@ -167,6 +168,8 @@ type CNN struct {
 	epochs       int       // number of epochs
 	learningRate float64   // learning rate parameter
 	desired      []float64 // desired output of the sample
+	fftSize      int       // 1024, 2048, 4096, 8192
+	fftWindow    string    // one of the winTypes
 }
 
 // test statistics that are tabulated in HTML
@@ -176,6 +179,9 @@ type Results struct {
 	Image   string // image
 	Count   string // int      number of training examples in the class
 }
+
+// Window function type
+type Window func(n int, m int) complex128
 
 // global variables and CNN architecture
 var (
@@ -190,8 +196,37 @@ var (
 	// staging location for pooling of convolution
 	clipboard [imgHeight][imgWidth]Node
 	// audio wav signal
-	audioSamples = make([]float64, samples)
+	audioSamples = make([]float64, SAMPLES)
+	winType      = []string{"Bartlett", "Welch", "Hamming", "Hanning", "Rectangle"}
 )
+
+// Bartlett window
+func bartlett(n int, m int) complex128 {
+	real := 1.0 - math.Abs((float64(n)-float64(m))/float64(m))
+	return complex(real, 0)
+}
+
+// Welch window
+func welch(n int, m int) complex128 {
+	x := math.Abs((float64(n) - float64(m)) / float64(m))
+	real := 1.0 - x*x
+	return complex(real, 0)
+}
+
+// Hamming window
+func hamming(n int, m int) complex128 {
+	return complex(.54-.46*math.Cos(math.Pi*float64(n)/float64(m)), 0)
+}
+
+// Hanning window
+func hanning(n int, m int) complex128 {
+	return complex(.5-.5*math.Cos(math.Pi*float64(n)/float64(m)), 0)
+}
+
+// Rectangle window
+func rectangle(n int, m int) complex128 {
+	return 1.0
+}
 
 // calculateMSE calculates the MSE at the output layer every epoch
 func (cnn *CNN) calculateMSE(epoch int) {
@@ -618,7 +653,7 @@ func (cnn *CNN) createExamples() error {
 		xscale    float64                      // data to grid in x direction
 		yscale    float64                      // data to grid in y direction
 	)
-	N = FFTSize
+	N = cnn.fftSize
 
 	// Power Spectral Density, PSD[N/2] is the Nyquist critical frequency
 	// It is (sampling frequency)/2, the highest non-aliased frequency
@@ -644,7 +679,7 @@ func (cnn *CNN) createExamples() error {
 			dec := wav.NewDecoder(f)
 			bufInt := audio.IntBuffer{
 				Format: &audio.Format{NumChannels: 1, SampleRate: sampleRate},
-				Data:   make([]int, samples), SourceBitDepth: bitDepth}
+				Data:   make([]int, SAMPLES), SourceBitDepth: bitDepth}
 			_, err = dec.PCMBuffer(&bufInt)
 			if err != nil {
 				fmt.Printf("PCMBuffer error: %v\n", err)
@@ -658,7 +693,7 @@ func (cnn *CNN) createExamples() error {
 			}
 
 			// zero-pad N-k samples in bufN
-			for i := samples; i < N; i++ {
+			for i := SAMPLES; i < N; i++ {
 				bufN[i] = 0
 			}
 
@@ -1047,8 +1082,8 @@ func handleTrainingCNN(w http.ResponseWriter, r *http.Request) {
 		}
 		defer f.Close()
 
-		// Save epochs and learning rate
-		fmt.Fprintf(f, "%d,%f\n", cnn.epochs, cnn.learningRate)
+		// Save epochs, learning rate, FFT size and FFT window type
+		fmt.Fprintf(f, "%d,%f,%d,%s\n", cnn.epochs, cnn.learningRate, cnn.fftSize, cnn.fftWindow)
 
 		// Save the weights in cnn.link
 		// Save Filters, 10x10 kernel and bias weights, one filter per line
@@ -1351,7 +1386,7 @@ func handleTestingCNN(w http.ResponseWriter, r *http.Request) {
 		// create wav decoder, audio IntBuffer, convert to audio FloatBuffer
 		// loop over the FloatBuffer.Data and generate the Spectral Power Density
 		// fill the grid with the PSD values
-		err := processFrequencyDomain(&plot, filename)
+		err := cnn.processFrequencyDomain(r, filename)
 		if err != nil {
 			fmt.Printf("processFrequencyDomain error: %v\n", err)
 			plot.Status = fmt.Sprintf("processFrequencyDomain error: %v", err.Error())
@@ -1371,8 +1406,147 @@ func handleTestingCNN(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Welch's Method and Bartlett's Method variation of the Periodogram
+func (cnn *CNN) calculatePSD(r *http.Request, audio []float64, PSD []float64) (float64, float64, error) {
+
+	N := cnn.fftSize
+	m := N / 2
+
+	// map of window functions
+	window := make(map[string]Window, len(winType))
+	// Put the window functions in the map
+	window["Bartlett"] = bartlett
+	window["Welch"] = welch
+	window["Hamming"] = hamming
+	window["Hanning"] = hanning
+	window["Rectangle"] = rectangle
+
+	w, ok := window[cnn.fftWindow]
+	if !ok {
+		fmt.Printf("Invalid FFT window type: %v\n", cnn.fftWindow)
+		return 0, 0, fmt.Errorf("invalid FFT window type: %v", cnn.fftWindow)
+	}
+	sumWindow := 0.0
+	// sum the window values for PSD normalization due to windowing
+	for i := 0; i < N; i++ {
+		x := cmplx.Abs(w(i, N))
+		sumWindow += x * x
+	}
+	fmt.Printf("%s window sum = %.2f\n", cnn.fftWindow, sumWindow)
+
+	psdMax := -math.MaxFloat64 // maximum PSD value
+	psdMin := math.MaxFloat64  // minimum PSD value
+
+	bufm := make([]complex128, m)
+	bufN := make([]complex128, N)
+
+	// part of K*Sum(w[i]*w[i]) PSD normalizer
+	normalizerPSD := sumWindow
+
+	// Bartlett's method has no overlap of input data and uses the rectangle window
+	if cnn.fftWindow == "Rectangle" {
+		sections := SAMPLES / N
+		start := 0
+		// Loop over sections and accumulate the PSD
+		for i := 0; i < sections; i++ {
+
+			//copy(bufN, audio[i*N:])
+			for j := 0; j < N; j++ {
+				bufN[j] = complex(audio[start+j], 0)
+			}
+
+			// Rectangle window, unity gain
+
+			// Perform N-point complex FFT and add squares to previous values in PSD
+			// Normalize the PSD with the window sum, then convert to dB with 10*log10()
+			fourierN := fft.FFT(bufN)
+			x := cmplx.Abs(fourierN[0])
+			PSD[0] += 10.0 * math.Log10(x*x)
+			for j := 1; j < N/2; j++ {
+				// Use positive and negative frequencies -> bufN[N-i] = bufN[-i]
+				xi := cmplx.Abs(fourierN[j])
+				xNi := cmplx.Abs(fourierN[N-i])
+				PSD[j] += 10.0 * math.Log10(xi*xi+xNi*xNi)
+			}
+
+			// part of K*Sum(w[i]*w[i]) PSD normalizer
+			normalizerPSD += sumWindow
+		}
+
+		// Normalize the PSD using K*Sum(w[i]*w[i])
+		// Use log plot for wide dynamic range
+
+		for i := range PSD {
+			PSD[i] /= normalizerPSD
+			PSD[i] = 10.0 * math.Log10(PSD[i])
+			if PSD[i] > psdMax {
+				psdMax = PSD[i]
+			}
+			if PSD[i] < psdMin {
+				psdMin = PSD[i]
+			}
+		}
+		start += N
+		// 50% overlap sections of audio input for non-rectangle windows, Welch's method
+	} else {
+		// use two buffers, copy previous section to the front of current
+		for j := 0; j < m; j++ {
+			bufm[j] = complex(audio[j], 0)
+		}
+		sections := (SAMPLES - N) / m
+		start := 0
+		for i := 0; i < sections; i++ {
+			start += m
+			// copy previous section to front of current section
+			copy(bufN, bufm)
+			// Get the next fftSize/2 audio samples
+			for j := 0; j < m; j++ {
+				bufm[j] = complex(audio[start+j], 0)
+			}
+			// Put current section in back of previous
+			copy(bufN[m:], bufm)
+
+			// window the m + kk samples with chosen window
+			for i := 0; i < N; i++ {
+				bufN[i] *= w(i, m)
+			}
+
+			// Perform N-point complex FFT and add squares to previous values in PSD
+			// Normalize the PSD with the window sum, then convert to dB with 10*log10()
+			fourierN := fft.FFT(bufN)
+			x := cmplx.Abs(fourierN[0])
+			PSD[0] += 10.0 * math.Log10(x*x)
+			for j := 1; j < m; j++ {
+				// Use positive and negative frequencies -> bufN[N-i] = bufN[-i]
+				xi := cmplx.Abs(fourierN[j])
+				xNi := cmplx.Abs(fourierN[cnn.fftSize-i])
+				PSD[j] += 10.0 * math.Log10(xi*xi+xNi*xNi)
+			}
+
+			// part of K*Sum(w[i]*w[i]) PSD normalizer
+			normalizerPSD += sumWindow
+		}
+
+		// Normalize the PSD using K*Sum(w[i]*w[i])
+		// Use log plot for wide dynamic range
+
+		for i := range PSD {
+			PSD[i] /= normalizerPSD
+			PSD[i] = 10.0 * math.Log10(PSD[i])
+			if PSD[i] > psdMax {
+				psdMax = PSD[i]
+			}
+			if PSD[i] < psdMin {
+				psdMin = PSD[i]
+			}
+		}
+	}
+
+	return psdMin, psdMax, nil
+}
+
 // processFrequencyDomain calculates the Power Spectral Density (PSD) and plots it
-func processFrequencyDomain(plot *PlotT, filename string) error {
+func (cnn *CNN) processFrequencyDomain(r *http.Request, filename string) error {
 	// Use complex128 for FFT computation
 	// open and read the audio wav file
 	// create wav decoder, audio IntBuffer, convert IntBuffer to audio FloatBuffer
@@ -1381,19 +1555,31 @@ func processFrequencyDomain(plot *PlotT, filename string) error {
 
 	var (
 		endpoints Endpoints
-		N         int                          //  complex FFT size
-		PSD       []float64                    // power spectral density
-		psdMax    float64   = -math.MaxFloat64 // maximum PSD value
-		psdMin    float64   = math.MaxFloat64  // minimum PSD value
-		xscale    float64                      // data to grid in x direction
-		yscale    float64                      // data to grid in y direction
+		PSD       []float64 // power spectral density
+		xscale    float64   // data to grid in x direction
+		yscale    float64   // data to grid in y direction
 	)
 
-	plot.Grid = make([]string, rows*cols)
-	plot.Xlabel = make([]string, xlabels)
-	plot.Ylabel = make([]string, ylabels)
+	cnn.plot.Grid = make([]string, rows*cols)
+	cnn.plot.Xlabel = make([]string, xlabels)
+	cnn.plot.Ylabel = make([]string, ylabels)
 
-	N = FFTSize
+	// Get FFT size and FFT window type from the HTML form
+	tmp := r.FormValue("fftsize")
+	if len(tmp) == 0 {
+		return fmt.Errorf("enter FFT size")
+	}
+	N, err := strconv.Atoi(tmp)
+	if err != nil {
+		return fmt.Errorf("fft size string convert error: %v", err)
+	}
+	cnn.fftSize = N
+
+	win := r.FormValue("fftwindow")
+	if len(win) == 0 {
+		return fmt.Errorf("enter FFT window type")
+	}
+	cnn.fftWindow = win
 
 	// Power Spectral Density, PSD[N/2] is the Nyquist critical frequency
 	// It is (sampling frequency)/2, the highest non-aliased frequency
@@ -1406,7 +1592,7 @@ func processFrequencyDomain(plot *PlotT, filename string) error {
 		dec := wav.NewDecoder(f)
 		bufInt := audio.IntBuffer{
 			Format: &audio.Format{NumChannels: 1, SampleRate: sampleRate},
-			Data:   make([]int, samples), SourceBitDepth: bitDepth}
+			Data:   make([]int, SAMPLES), SourceBitDepth: bitDepth}
 		_, err := dec.PCMBuffer(&bufInt)
 		if err != nil {
 			fmt.Printf("PCMBuffer error: %v\n", err)
@@ -1414,34 +1600,11 @@ func processFrequencyDomain(plot *PlotT, filename string) error {
 		}
 		bufFlt := bufInt.AsFloatBuffer()
 
-		bufN := make([]complex128, N)
-		for k, real := range bufFlt.Data {
-			bufN[k] = complex(real, 0.0)
-		}
-
-		// zero-pad N-k samples in bufN
-		for i := samples; i < N; i++ {
-			bufN[i] = 0
-		}
-
-		// Perform N-point complex FFT and insert magnitude^2 in PSD
-		// Then convert to dB with 10*log10()
-		fourierN := fft.FFT(bufN)
-		x := cmplx.Abs(fourierN[0])
-		PSD[0] = 10.0 * math.Log10(x*x)
-		psdMax = PSD[0]
-		psdMin = PSD[0]
-		for i := 1; i < N/2; i++ {
-			// Use positive and negative frequencies -> bufN[N-i] = bufN[-i]
-			xi := cmplx.Abs(fourierN[i])
-			xNi := cmplx.Abs(fourierN[N-i])
-			PSD[i] = 10.0 * math.Log10(xi*xi+xNi*xNi)
-			if PSD[i] > psdMax {
-				psdMax = PSD[i]
-			}
-			if PSD[i] < psdMin {
-				psdMin = PSD[i]
-			}
+		// calculate the PSD using Bartlett's or Welch's variant of the Periodogram
+		psdMin, psdMax, err := cnn.calculatePSD(r, bufFlt.Data, PSD)
+		if err != nil {
+			fmt.Printf("calculatePSD error: %v\n", err)
+			return fmt.Errorf("calculatePSD error: %v", err.Error())
 		}
 
 		endpoints.xmin = 0.0
@@ -1462,7 +1625,7 @@ func processFrequencyDomain(plot *PlotT, filename string) error {
 		// This previous cell location (row,col) is on the line (visible)
 		row := int((endpoints.ymax-PSD[0])*yscale + .5)
 		col := int((float64(0)-endpoints.xmin)*xscale + .5)
-		plot.Grid[row*cols+col] = "online"
+		cnn.plot.Grid[row*cols+col] = "online"
 
 		// Store the PSD in the plot Grid
 		for bin := 1; bin < N/2; bin++ {
@@ -1470,7 +1633,7 @@ func processFrequencyDomain(plot *PlotT, filename string) error {
 			// This current cell location (row,col) is on the line (visible)
 			row := int((endpoints.ymax-PSD[bin])*yscale + .5)
 			col := int((float64(bin)-endpoints.xmin)*xscale + .5)
-			plot.Grid[row*cols+col] = "online"
+			cnn.plot.Grid[row*cols+col] = "online"
 
 			// Interpolate the points between previous point and current point;
 			// draw a straight line between points.
@@ -1494,7 +1657,7 @@ func processFrequencyDomain(plot *PlotT, filename string) error {
 				row := int((endpoints.ymax-interpPSD)*yscale + .5)
 				col := int((interpBin-endpoints.xmin)*xscale + .5)
 				// This cell location (row,col) is on the line (visible)
-				plot.Grid[row*cols+col] = "online"
+				cnn.plot.Grid[row*cols+col] = "online"
 				interpBin += stepBin
 				interpPSD += stepPSD
 			}
@@ -1508,8 +1671,8 @@ func processFrequencyDomain(plot *PlotT, filename string) error {
 		// Plot the PSD N/2 float64 values, execute the data on the plotfrequency.html template
 
 		// Set plot status if no errors
-		if len(plot.Status) == 0 {
-			plot.Status = fmt.Sprintf("file %s plotted from (%.3f,%.3f) to (%.3f,%.3f)",
+		if len(cnn.plot.Status) == 0 {
+			cnn.plot.Status = fmt.Sprintf("file %s plotted from (%.3f,%.3f) to (%.3f,%.3f)",
 				filename, endpoints.xmin, endpoints.ymin, endpoints.xmax, endpoints.ymax)
 		}
 
@@ -1527,16 +1690,16 @@ func processFrequencyDomain(plot *PlotT, filename string) error {
 	incr := (endpoints.xmax - endpoints.xmin) / (xlabels - 1)
 	x := endpoints.xmin
 	// First label is empty for alignment purposes
-	for i := range plot.Xlabel {
-		plot.Xlabel[i] = fmt.Sprintf("%.0f", x*sf)
+	for i := range cnn.plot.Xlabel {
+		cnn.plot.Xlabel[i] = fmt.Sprintf("%.0f", x*sf)
 		x += incr
 	}
 
 	// Construct the y-axis labels
 	incr = (endpoints.ymax - endpoints.ymin) / (ylabels - 1)
 	y := endpoints.ymin
-	for i := range plot.Ylabel {
-		plot.Ylabel[i] = fmt.Sprintf("%.2f", y)
+	for i := range cnn.plot.Ylabel {
+		cnn.plot.Ylabel[i] = fmt.Sprintf("%.2f", y)
 		y += incr
 	}
 
@@ -1648,7 +1811,7 @@ func handleAudioGeneration(w http.ResponseWriter, r *http.Request) {
 				t := 0.0
 
 				// loop over the samples
-				for samp := 0; samp < samples; samp++ {
+				for samp := 0; samp < SAMPLES; samp++ {
 					sum := 0.0
 					// loop over the sinusoidal frequencies
 					for _, f := range fflt64 {
@@ -1715,7 +1878,8 @@ func handleAudioGeneration(w http.ResponseWriter, r *http.Request) {
 			// create wav decoder, audio IntBuffer, convert to audio FloatBuffer
 			// loop over the FloatBuffer.Data and generate the Spectral Power Density
 			// fill the grid with the PSD values
-			err := processFrequencyDomain(&plot, filename)
+			cnn := CNN{plot: &plot}
+			err := cnn.processFrequencyDomain(r, filename)
 			if err != nil {
 				fmt.Printf("processFrequencyDomain error: %v\n", err)
 				plot.Status = fmt.Sprintf("processFrequencyDomain error: %v", err.Error())
