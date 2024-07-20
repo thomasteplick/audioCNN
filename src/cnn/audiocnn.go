@@ -646,12 +646,10 @@ func (cnn *CNN) createExamples() error {
 
 	var (
 		endpoints Endpoints
-		N         int                          //  complex FFT size
-		PSD       []float64                    // power spectral density
-		psdMax    float64   = -math.MaxFloat64 // maximum PSD value
-		psdMin    float64   = math.MaxFloat64  // minimum PSD value
-		xscale    float64                      // data to grid in x direction
-		yscale    float64                      // data to grid in y direction
+		N         int       //  complex FFT size
+		PSD       []float64 // power spectral density
+		xscale    float64   // data to grid in x direction
+		yscale    float64   // data to grid in y direction
 	)
 	N = cnn.fftSize
 
@@ -687,34 +685,11 @@ func (cnn *CNN) createExamples() error {
 			}
 			bufFlt := bufInt.AsFloatBuffer()
 
-			bufN := make([]complex128, N)
-			for k, real := range bufFlt.Data {
-				bufN[k] = complex(real, 0.0)
-			}
-
-			// zero-pad N-k samples in bufN
-			for i := SAMPLES; i < N; i++ {
-				bufN[i] = 0
-			}
-
-			// Perform N-point complex FFT and insert magnitude^2 in PSD
-			// Then convert to dB with 10*log10()
-			fourierN := fft.FFT(bufN)
-			x := cmplx.Abs(fourierN[0])
-			PSD[0] = 10.0 * math.Log10(x*x)
-			psdMax = PSD[0]
-			psdMin = PSD[0]
-			for i := 1; i < N/2; i++ {
-				// Use positive and negative frequencies -> bufN[N-i] = bufN[-i]
-				xi := cmplx.Abs(fourierN[i])
-				xNi := cmplx.Abs(fourierN[N-i])
-				PSD[i] = 10.0 * math.Log10(xi*xi+xNi*xNi)
-				if PSD[i] > psdMax {
-					psdMax = PSD[i]
-				}
-				if PSD[i] < psdMin {
-					psdMin = PSD[i]
-				}
+			// calculate the PSD using Bartlett's or Welch's variant of the Periodogram
+			psdMin, psdMax, err := cnn.calculatePSD(bufFlt.Data, PSD)
+			if err != nil {
+				fmt.Printf("calculatePSD error: %v\n", err)
+				return fmt.Errorf("calculatePSD error: %v", err.Error())
 			}
 
 			endpoints.xmin = 0.0
@@ -741,7 +716,7 @@ func (cnn *CNN) createExamples() error {
 
 			// This previous cell location (row,col) is on the line (visible)
 			row := int((endpoints.ymax-PSD[0])*yscale + .5)
-			col := int((float64(0)-endpoints.xmin)*xscale + .5)
+			col := int((0.0-endpoints.xmin)*xscale + .5)
 			cnn.samples[class].image[row][col] = 1
 
 			// Store the PSD in the plot Grid
@@ -809,9 +784,20 @@ func newCNN(r *http.Request, epochs int, plot *PlotT) (*CNN, error) {
 		return nil, fmt.Errorf("learningrate float conversion error: %s", err.Error())
 	}
 
+	fftWindow := r.FormValue("fftwindow")
+
+	txt = r.FormValue("fftsize")
+	fftSize, err := strconv.Atoi(txt)
+	if err != nil {
+		fmt.Printf("fftsize int conversion error: %v\n", err)
+		return nil, fmt.Errorf("fftsize int conversion error: %s", err.Error())
+	}
+
 	cnn := CNN{
 		epochs:       epochs,
 		learningRate: learningRate,
+		fftWindow:    fftWindow,
+		fftSize:      fftSize,
 		plot:         plot,
 		Endpoints: Endpoints{
 			ymin: math.MaxFloat64,
@@ -1113,7 +1099,7 @@ func handleTrainingCNN(w http.ResponseWriter, r *http.Request) {
 			log.Fatalf("Write to HTTP output using template with error: %v\n", err)
 		}
 	} else {
-		plot.Status = "Enter Epochs and Learning Rate parameters."
+		plot.Status = "Enter Epochs, Learning Rate, FFT Size, and Window."
 		// Write to HTTP using template and grid
 		if err := tmplTrainingCNN.Execute(w, plot); err != nil {
 			log.Fatalf("Write to HTTP output using template with error: %v\n", err)
@@ -1161,6 +1147,8 @@ func (cnn *CNN) runClassification() error {
 	cnn.plot.TotalCorrect = strconv.Itoa(totalCorrect * 100 / totalCount)
 	cnn.plot.LearningRate = strconv.FormatFloat(cnn.learningRate, 'f', 5, 64)
 	cnn.plot.Epochs = strconv.Itoa(cnn.epochs)
+	cnn.plot.FFTSize = strconv.Itoa(cnn.fftSize)
+	cnn.plot.FFTWindow = cnn.fftWindow
 
 	cnn.plot.Status = "Testing results completed."
 
@@ -1247,24 +1235,38 @@ func newTestingCNN(r *http.Request, plot *PlotT) (*CNN, error) {
 
 	scanner := bufio.NewScanner(f)
 
-	// Read in epochs and learning rate
+	// Read in epochs, learning rate, fft size and fft window
 	scanner.Scan()
 	line := scanner.Text()
 	items := strings.Split(line, ",")
 
+	if len(items) != 4 {
+		fmt.Printf("Require 4 parameters in %s, have %d.\n", fileweights, len(items))
+		return nil, fmt.Errorf("require 4 parameters in %s, have %d", fileweights, len(items))
+	}
+
 	epochs, err := strconv.Atoi(items[0])
 	if err != nil {
-		fmt.Printf("Conversion to int of %s error: %v", items[0], err)
+		fmt.Printf("Conversion to int of %s error: %v\n", items[0], err)
 		return nil, err
 	}
 	cnn.epochs = epochs
 
 	learningRate, err := strconv.ParseFloat(items[1], 64)
 	if err != nil {
-		fmt.Printf("Conversion to float of %s error: %v", items[3], err)
+		fmt.Printf("Conversion to float of %s error: %v\n", items[1], err)
 		return nil, err
 	}
 	cnn.learningRate = learningRate
+
+	fftSize, err := strconv.Atoi(items[2])
+	if err != nil {
+		fmt.Printf("Conversion to int of %s error: %v\n", items[2], err)
+		return nil, err
+	}
+	cnn.fftSize = fftSize
+
+	cnn.fftWindow = items[3]
 
 	// retrieve the weights and insert in cnn.link
 	// Read Filters, 10x10 kernel and bias weights
@@ -1386,7 +1388,7 @@ func handleTestingCNN(w http.ResponseWriter, r *http.Request) {
 		// create wav decoder, audio IntBuffer, convert to audio FloatBuffer
 		// loop over the FloatBuffer.Data and generate the Spectral Power Density
 		// fill the grid with the PSD values
-		err := cnn.processFrequencyDomain(r, filename)
+		err := cnn.processFrequencyDomain(filename)
 		if err != nil {
 			fmt.Printf("processFrequencyDomain error: %v\n", err)
 			plot.Status = fmt.Sprintf("processFrequencyDomain error: %v", err.Error())
@@ -1407,7 +1409,7 @@ func handleTestingCNN(w http.ResponseWriter, r *http.Request) {
 }
 
 // Welch's Method and Bartlett's Method variation of the Periodogram
-func (cnn *CNN) calculatePSD(r *http.Request, audio []float64, PSD []float64) (float64, float64, error) {
+func (cnn *CNN) calculatePSD(audio []float64, PSD []float64) (float64, float64, error) {
 
 	N := cnn.fftSize
 	m := N / 2
@@ -1432,7 +1434,6 @@ func (cnn *CNN) calculatePSD(r *http.Request, audio []float64, PSD []float64) (f
 		x := cmplx.Abs(w(i, N))
 		sumWindow += x * x
 	}
-	fmt.Printf("%s window sum = %.2f\n", cnn.fftWindow, sumWindow)
 
 	psdMax := -math.MaxFloat64 // maximum PSD value
 	psdMin := math.MaxFloat64  // minimum PSD value
@@ -1443,8 +1444,14 @@ func (cnn *CNN) calculatePSD(r *http.Request, audio []float64, PSD []float64) (f
 	// part of K*Sum(w[i]*w[i]) PSD normalizer
 	normalizerPSD := sumWindow
 
+	// Initialize the PSD to zero as it is reused when creating examples
+	for i := range PSD {
+		PSD[i] = 0.0
+	}
+
 	// Bartlett's method has no overlap of input data and uses the rectangle window
-	if cnn.fftWindow == "Rectangle" {
+	// If FFT size is 8192, only use rectangle window
+	if cnn.fftWindow == "Rectangle" || cnn.fftSize == 8192 {
 		sections := SAMPLES / N
 		start := 0
 		// Loop over sections and accumulate the PSD
@@ -1461,12 +1468,12 @@ func (cnn *CNN) calculatePSD(r *http.Request, audio []float64, PSD []float64) (f
 			// Normalize the PSD with the window sum, then convert to dB with 10*log10()
 			fourierN := fft.FFT(bufN)
 			x := cmplx.Abs(fourierN[0])
-			PSD[0] += 10.0 * math.Log10(x*x)
+			PSD[0] += x * x
 			for j := 1; j < N/2; j++ {
-				// Use positive and negative frequencies -> bufN[N-i] = bufN[-i]
-				xi := cmplx.Abs(fourierN[j])
-				xNi := cmplx.Abs(fourierN[N-i])
-				PSD[j] += 10.0 * math.Log10(xi*xi+xNi*xNi)
+				// Use positive and negative frequencies -> bufN[N-j] = bufN[-j]
+				xj := cmplx.Abs(fourierN[j])
+				xNj := cmplx.Abs(fourierN[N-j])
+				PSD[j] += xj*xj + xNj*xNj
 			}
 
 			// part of K*Sum(w[i]*w[i]) PSD normalizer
@@ -1479,6 +1486,9 @@ func (cnn *CNN) calculatePSD(r *http.Request, audio []float64, PSD []float64) (f
 		for i := range PSD {
 			PSD[i] /= normalizerPSD
 			PSD[i] = 10.0 * math.Log10(PSD[i])
+			if i == 0 {
+				fmt.Printf("PSD[0] normalized = %.3f\n", PSD[0])
+			}
 			if PSD[i] > psdMax {
 				psdMax = PSD[i]
 			}
@@ -1486,6 +1496,7 @@ func (cnn *CNN) calculatePSD(r *http.Request, audio []float64, PSD []float64) (f
 				psdMin = PSD[i]
 			}
 		}
+		// No overlap, skip to next N samples
 		start += N
 		// 50% overlap sections of audio input for non-rectangle windows, Welch's method
 	} else {
@@ -1506,7 +1517,7 @@ func (cnn *CNN) calculatePSD(r *http.Request, audio []float64, PSD []float64) (f
 			// Put current section in back of previous
 			copy(bufN[m:], bufm)
 
-			// window the m + kk samples with chosen window
+			// window the N samples with chosen window
 			for i := 0; i < N; i++ {
 				bufN[i] *= w(i, m)
 			}
@@ -1515,12 +1526,12 @@ func (cnn *CNN) calculatePSD(r *http.Request, audio []float64, PSD []float64) (f
 			// Normalize the PSD with the window sum, then convert to dB with 10*log10()
 			fourierN := fft.FFT(bufN)
 			x := cmplx.Abs(fourierN[0])
-			PSD[0] += 10.0 * math.Log10(x*x)
+			PSD[0] += x * x
 			for j := 1; j < m; j++ {
-				// Use positive and negative frequencies -> bufN[N-i] = bufN[-i]
-				xi := cmplx.Abs(fourierN[j])
-				xNi := cmplx.Abs(fourierN[cnn.fftSize-i])
-				PSD[j] += 10.0 * math.Log10(xi*xi+xNi*xNi)
+				// Use positive and negative frequencies -> bufN[N-j] = bufN[-j]
+				xj := cmplx.Abs(fourierN[j])
+				xNj := cmplx.Abs(fourierN[cnn.fftSize-j])
+				PSD[j] += xj*xj + xNj*xNj
 			}
 
 			// part of K*Sum(w[i]*w[i]) PSD normalizer
@@ -1546,7 +1557,7 @@ func (cnn *CNN) calculatePSD(r *http.Request, audio []float64, PSD []float64) (f
 }
 
 // processFrequencyDomain calculates the Power Spectral Density (PSD) and plots it
-func (cnn *CNN) processFrequencyDomain(r *http.Request, filename string) error {
+func (cnn *CNN) processFrequencyDomain(filename string) error {
 	// Use complex128 for FFT computation
 	// open and read the audio wav file
 	// create wav decoder, audio IntBuffer, convert IntBuffer to audio FloatBuffer
@@ -1564,22 +1575,7 @@ func (cnn *CNN) processFrequencyDomain(r *http.Request, filename string) error {
 	cnn.plot.Xlabel = make([]string, xlabels)
 	cnn.plot.Ylabel = make([]string, ylabels)
 
-	// Get FFT size and FFT window type from the HTML form
-	tmp := r.FormValue("fftsize")
-	if len(tmp) == 0 {
-		return fmt.Errorf("enter FFT size")
-	}
-	N, err := strconv.Atoi(tmp)
-	if err != nil {
-		return fmt.Errorf("fft size string convert error: %v", err)
-	}
-	cnn.fftSize = N
-
-	win := r.FormValue("fftwindow")
-	if len(win) == 0 {
-		return fmt.Errorf("enter FFT window type")
-	}
-	cnn.fftWindow = win
+	N := cnn.fftSize
 
 	// Power Spectral Density, PSD[N/2] is the Nyquist critical frequency
 	// It is (sampling frequency)/2, the highest non-aliased frequency
@@ -1601,7 +1597,7 @@ func (cnn *CNN) processFrequencyDomain(r *http.Request, filename string) error {
 		bufFlt := bufInt.AsFloatBuffer()
 
 		// calculate the PSD using Bartlett's or Welch's variant of the Periodogram
-		psdMin, psdMax, err := cnn.calculatePSD(r, bufFlt.Data, PSD)
+		psdMin, psdMax, err := cnn.calculatePSD(bufFlt.Data, PSD)
 		if err != nil {
 			fmt.Printf("calculatePSD error: %v\n", err)
 			return fmt.Errorf("calculatePSD error: %v", err.Error())
@@ -1624,7 +1620,7 @@ func (cnn *CNN) processFrequencyDomain(r *http.Request, filename string) error {
 
 		// This previous cell location (row,col) is on the line (visible)
 		row := int((endpoints.ymax-PSD[0])*yscale + .5)
-		col := int((float64(0)-endpoints.xmin)*xscale + .5)
+		col := int((0.0-endpoints.xmin)*xscale + .5)
 		cnn.plot.Grid[row*cols+col] = "online"
 
 		// Store the PSD in the plot Grid
@@ -1878,8 +1874,28 @@ func handleAudioGeneration(w http.ResponseWriter, r *http.Request) {
 			// create wav decoder, audio IntBuffer, convert to audio FloatBuffer
 			// loop over the FloatBuffer.Data and generate the Spectral Power Density
 			// fill the grid with the PSD values
-			cnn := CNN{plot: &plot}
-			err := cnn.processFrequencyDomain(r, filename)
+			fftWindow := r.FormValue("fftwindow")
+			txt = r.FormValue("fftsize")
+			if len(fftWindow) == 0 || len(txt) == 0 {
+				fmt.Printf("missing FFT window %s or FFT size %s\n", fftWindow, txt)
+				plot.Status = fmt.Sprintf("missing FFT window %s or FFT size %s\n", fftWindow, txt)
+				// Write to HTTP using template and grid
+				if err := tmplAudioGeneration.Execute(w, plot); err != nil {
+					log.Fatalf("Write to HTTP output using template with error: %v\n", err)
+				}
+			}
+			fftSize, err := strconv.Atoi(txt)
+			if err != nil {
+				fmt.Printf("fftsize int conversion error: %v\n", err)
+				plot.Status = fmt.Sprintf("fftsize int conversion error: %v\n", err)
+				// Write to HTTP using template and grid
+				if err := tmplAudioGeneration.Execute(w, plot); err != nil {
+					log.Fatalf("Write to HTTP output using template with error: %v\n", err)
+				}
+			}
+
+			cnn := CNN{plot: &plot, fftSize: fftSize, fftWindow: fftWindow}
+			err = cnn.processFrequencyDomain(filename)
 			if err != nil {
 				fmt.Printf("processFrequencyDomain error: %v\n", err)
 				plot.Status = fmt.Sprintf("processFrequencyDomain error: %v", err.Error())
@@ -1889,7 +1905,6 @@ func handleAudioGeneration(w http.ResponseWriter, r *http.Request) {
 				}
 				return
 			}
-
 		}
 		// Execute data on HTML template
 		if err := tmplAudioGeneration.Execute(w, plot); err != nil {
@@ -1897,7 +1912,7 @@ func handleAudioGeneration(w http.ResponseWriter, r *http.Request) {
 		}
 
 	} else {
-		plot.Status = "Enter either SNR or an audio wav filename."
+		plot.Status = "Enter either SNR or an audio wav filename.  Choose FFT Size and Window."
 		// Write to HTTP using template and grid
 		if err := tmplAudioGeneration.Execute(w, plot); err != nil {
 			log.Fatalf("Write to HTTP output using template with error: %v\n", err)
