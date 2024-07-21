@@ -1527,7 +1527,7 @@ func (cnn *CNN) calculatePSD(audio []float64, PSD []float64) (float64, float64, 
 			for j := 1; j < m; j++ {
 				// Use positive and negative frequencies -> bufN[N-j] = bufN[-j]
 				xj := cmplx.Abs(fourierN[j])
-				xNj := cmplx.Abs(fourierN[cnn.fftSize-j])
+				xNj := cmplx.Abs(fourierN[N-j])
 				PSD[j] += xj*xj + xNj*xNj
 			}
 
