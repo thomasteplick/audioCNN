@@ -768,7 +768,7 @@ func (cnn *CNN) createExamples() error {
 			class++
 		}
 	}
-	fmt.Printf("Read %d png files\n", class)
+	fmt.Printf("Read %d wav files\n", class)
 
 	return nil
 }
@@ -1486,9 +1486,6 @@ func (cnn *CNN) calculatePSD(audio []float64, PSD []float64) (float64, float64, 
 		for i := range PSD {
 			PSD[i] /= normalizerPSD
 			PSD[i] = 10.0 * math.Log10(PSD[i])
-			if i == 0 {
-				fmt.Printf("PSD[0] normalized = %.3f\n", PSD[0])
-			}
 			if PSD[i] > psdMax {
 				psdMax = PSD[i]
 			}
