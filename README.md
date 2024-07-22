@@ -28,7 +28,7 @@ The 300x300 images are converted to 1 or -1 integers that represent the PSD grap
 The 1 represents black (on the graph)  and the -1 represents white (not on the graph).  The WAV audio files were produced using the Generate Audio page.  The user selects the SNR in
 dB (0-50).  The program generates 16 wav audio files consisting of 8,192 16-bit samples of 5-8 sinusoids using a sampling frequency of 4,000 Hz (64kbps).  This
 produces a two-second wav audio file.  The 16 sinsuoids are between 120 and 1920 Hz, at multiples of 120.  Since the sampling rate is 4,000 Hz, the Nyquist frequency 
-is 2,000 Hz and frequencies above this are aliased.
+is 2,000 Hz and frequencies above this are aliased.  Gaussian noise is added to the sinsuoidal sum with zero mean and standard deviation depending on the SNR.
 </p>
 <p>
 When the <i>Submit</i> button on the CNN Training Parameters form is clicked, the weights in the network are trained
@@ -61,6 +61,13 @@ This architecture can classify 2^4 = 16 images.  The flattened fully-connected l
 between the last hidden layer and the output layer is 30*15*15 + 1 = 6751 neurons.
 These are fully connected to the output layer consisting of the four neurons.
 This will require 4*6751 weights. 
+</p>
+
+<p>
+ In the <i>Generate Audio</i> and <i>Train</i> pages, the user can select the form of the PSD generated.  Either Bartlett or Welch
+ variant can be chosen.  The window type can be selected from among Bartlett, Hamming, Hanning, and  Welch.  These are used
+ with 50% overlap between FFT sections.  The Rectangle window does not use overlap.  The number of FFT sections depends on
+ the FFT size chosen.  Smaller FFTs have more sections which are summed and averaged.  This reduces the variance of the PSD.
 </p>
 
 <b>Generate Audio Wav Files, 50dB SNR</b>
