@@ -63,12 +63,23 @@ These are fully connected to the output layer consisting of the four neurons.
 This will require 4*6751 weights. 
 </p>
 
+<b>Generate Audio Wav Files, 50dB SNR</b>
+![image](https://github.com/user-attachments/assets/6a46a537-1499-43ca-ae98-c373200cdc0d)
+
+<b>Audio Recognition Learning Curve, MSE vs Epoch, One Hidden Layer, 30 feature maps, 30x30 neurons average downsamples 2x, flattened layer</b>
+<b>50dB SNR, Learning Rate .0001, Epochs 400</b>
+![image](https://github.com/user-attachments/assets/9072b478-733a-453e-81e3-2f72dc4f5a0f)
+
+<b>Audio Recognition Test Results, One Hidden Layer, 30 feature maps, 30x30 neurons average downsamples 2x, flattened layer</b>
+<b>50dB SNR, Learning Rate .0001, Epochs 400</b>
+![image](https://github.com/user-attachments/assets/f38ba908-2762-4dc5-b274-3497b8f1db3a)
+
 <b>Audio Recognition Learning Curve, MSE vs Epoch, One Hidden Layer, 30 feature maps, 30x30 neurons average downsampled 2x, flattened output layer
-<b>0 SNR, Learning Rate .001, Epochs 200
+<b>0dB SNR, Learning Rate .001, Epochs 200</b>
 ![image](https://github.com/user-attachments/assets/c8029ef4-860a-40ad-82c4-4be57129ffd3)
 
 <b>Audio Recognition Test Results, One Hidden Layer, 30 feature maps, 30x30 neurons average downsampled 2x, flattened output layer</b>
-<b>0 SNR, Learning Rate .001, Epochs 200
+<b>0dB SNR, Learning Rate .001, Epochs 200</b>
 ![image](https://github.com/user-attachments/assets/9720cb82-78ce-4102-b4f4-092385e66073)
 
 
