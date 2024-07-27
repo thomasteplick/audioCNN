@@ -1478,30 +1478,17 @@ func (cnn *CNN) calculatePSD(audio []float64, PSD []float64) (float64, float64, 
 
 			// part of K*Sum(w[i]*w[i]) PSD normalizer
 			normalizerPSD += sumWindow
+			// No overlap, skip to next N samples
+			start += N
 		}
 
-		// Normalize the PSD using K*Sum(w[i]*w[i])
-		// Use log plot for wide dynamic range
-
-		for i := range PSD {
-			PSD[i] /= normalizerPSD
-			PSD[i] = 10.0 * math.Log10(PSD[i])
-			if PSD[i] > psdMax {
-				psdMax = PSD[i]
-			}
-			if PSD[i] < psdMin {
-				psdMin = PSD[i]
-			}
-		}
-		// No overlap, skip to next N samples
-		start += N
 		// 50% overlap sections of audio input for non-rectangle windows, Welch's method
 	} else {
 		// use two buffers, copy previous section to the front of current
 		for j := 0; j < m; j++ {
 			bufm[j] = complex(audio[j], 0)
 		}
-		sections := (SAMPLES - N) / m
+		sections := (SAMPLES-N)/m + 1
 		start := 0
 		for i := 0; i < sections; i++ {
 			start += m
@@ -1535,18 +1522,18 @@ func (cnn *CNN) calculatePSD(audio []float64, PSD []float64) (float64, float64, 
 			normalizerPSD += sumWindow
 		}
 
-		// Normalize the PSD using K*Sum(w[i]*w[i])
-		// Use log plot for wide dynamic range
+	}
 
-		for i := range PSD {
-			PSD[i] /= normalizerPSD
-			PSD[i] = 10.0 * math.Log10(PSD[i])
-			if PSD[i] > psdMax {
-				psdMax = PSD[i]
-			}
-			if PSD[i] < psdMin {
-				psdMin = PSD[i]
-			}
+	// Normalize the PSD using K*Sum(w[i]*w[i])
+	// Use log plot for wide dynamic range
+	for i := range PSD {
+		PSD[i] /= normalizerPSD
+		PSD[i] = 10.0 * math.Log10(PSD[i])
+		if PSD[i] > psdMax {
+			psdMax = PSD[i]
+		}
+		if PSD[i] < psdMin {
+			psdMin = PSD[i]
 		}
 	}
 
